@@ -1,0 +1,16 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Ultralytics
+runs/
+
+# DVC - These files will be tracked by DVC, not Git
+data/css-dataset/
+models/best.pt
+
+# OS
+.DS_Store

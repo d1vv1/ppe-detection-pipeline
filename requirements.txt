@@ -1,0 +1,8 @@
+# For training
+ultralytics
+opencv-python
+wandb
+
+# For Data Version Control
+# Choose one based on your storage: [gdrive], [s3], [azure], [ssh]
+dvc[gdrive]
