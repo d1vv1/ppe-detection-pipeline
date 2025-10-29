@@ -14,3 +14,6 @@ models/best.pt
 
 # OS
 .DS_Store
+
+# Service Account credentials
+service-account-key.json
