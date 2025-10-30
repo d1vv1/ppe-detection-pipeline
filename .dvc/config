@@ -1,6 +1,5 @@
 [core]
-    remote = gdrive_remote
-['remote "gdrive_remote"']
-    url = gdrive://16v7eH_ewi2SihNSZDCJXUzBYY8p10wHT
-    gdrive_use_service_account = true
-    gdrive_service_account_json_file_path = ../service-account-key.json
+    remote = myremote
+['remote "myremote"']
+    url = s3://divyanshu-ppe-pipeline-cache
+    endpointurl = https://s3.us-east-005.backblazeb2.com
