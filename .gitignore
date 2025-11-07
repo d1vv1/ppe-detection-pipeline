@@ -21,3 +21,4 @@ service-account-key.json
 # Wandb
 wandb/
 yolov8m.pt
+.dvcignore
