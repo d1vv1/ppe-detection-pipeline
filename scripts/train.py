@@ -144,25 +144,39 @@ def train_model(
         
         # Check if it's an authentication error
         if "401" in error_msg or "not logged in" in error_msg.lower() or "PERMISSION_ERROR" in error_msg:
-            print("  Authentication issue detected. Trying to re-login...")
+            print("  Authentication issue detected.")
+            print("  Possible causes:")
+            print("    - Invalid or expired API key")
+            print("    - Network connectivity issues")
+            print("    - W&B service temporarily unavailable")
+            print("  Attempting alternative initialization methods...")
+            
             try:
-                # Try to force re-login with relogin=True
-                if api_key:
-                    wandb.login(key=api_key, relogin=True)
-                    # Wait a moment for login to complete
-                    time.sleep(1)
-                    # Try init again after re-login
-                    if run_name is None:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        run_name = f"yolov8{model_size}-ppe-{timestamp}"
-                    wandb.init(project=project_name, name=run_name)
-                    wandb_initialized = True
-                    print("✓ W&B initialized after re-login")
-                else:
-                    print("  No API key available for re-login. Ultralytics will attempt auto-initialization.")
-            except Exception as retry_error:
-                print(f"  Re-login failed: {retry_error}")
-                print("  Ultralytics will attempt to initialize wandb automatically during training.")
+                # Method 1: Try offline mode first, then sync later
+                print("  Trying W&B offline mode (will sync later)...")
+                wandb.init(project=project_name, name=run_name, mode="offline")
+                wandb_initialized = True
+                print("✓ W&B initialized in offline mode (will sync when online)")
+            except Exception as offline_error:
+                print(f"  Offline mode failed: {offline_error}")
+                try:
+                    # Method 2: Try with relogin
+                    if api_key:
+                        print("  Trying forced re-login...")
+                        wandb.login(key=api_key, relogin=True)
+                        time.sleep(2)  # Wait longer for login to complete
+                        if run_name is None:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            run_name = f"yolov8{model_size}-ppe-{timestamp}"
+                        wandb.init(project=project_name, name=run_name)
+                        wandb_initialized = True
+                        print("✓ W&B initialized after re-login")
+                    else:
+                        print("  No API key available. Ultralytics will attempt auto-initialization.")
+                except Exception as retry_error:
+                    print(f"  Re-login also failed: {retry_error}")
+                    print("  Ultralytics will attempt to initialize wandb automatically during training.")
+                    print("  If that fails, metrics will only be saved locally.")
         else:
             print("  Ultralytics will attempt to initialize wandb automatically during training.")
             print("  Metrics will be logged to W&B if Ultralytics successfully initializes it.")
@@ -221,8 +235,9 @@ def train_model(
     
     # CRITICAL: Enable wandb in Ultralytics
     # Ultralytics automatically detects wandb if it's installed and initialized
-    # We just need to set the project name - Ultralytics will use wandb if available
-    train_args["project"] = project_name
+    # Set project to 'runs' to avoid nested directory structure
+    # The project name for W&B is separate from the save directory
+    train_args["project"] = "runs"  # Use 'runs' to save in runs/detect/ directory
     # NOTE: Do NOT pass wandb=True - it's not a valid argument
     # Ultralytics automatically uses wandb if wandb.init() was called before training
     
@@ -231,6 +246,8 @@ def train_model(
     else:
         print("⚠ W&B not manually initialized - Ultralytics may still auto-initialize wandb")
         print("  If wandb is installed, Ultralytics will attempt to initialize it automatically")
+        # Try to let Ultralytics handle W&B completely by ensuring wandb is available
+        # Ultralytics will create its own wandb run if it detects wandb is installed
     
     print("\n" + "=" * 60)
     print("Training Configuration:")
@@ -316,9 +333,32 @@ def train_model(
     
     # Save the best model to models directory and backup to Google Drive
     try:
-        # The best model is saved by Ultralytics in runs/detect/{name}/weights/best.pt
-        source_model_path = project_root / 'runs' / 'detect' / run_name_dir / 'weights' / 'best.pt'
-        source_last_path = project_root / 'runs' / 'detect' / run_name_dir / 'weights' / 'last.pt'
+        # The best model is saved by Ultralytics
+        # Check both possible locations: runs/detect/ and the project directory
+        possible_dirs = [
+            project_root / 'runs' / 'detect' / run_name_dir,
+            project_root / project_name / run_name_dir,  # If project name was used as directory
+            project_root / run_name_dir,  # Direct save
+        ]
+        
+        # Find the actual save directory
+        save_dir = None
+        for possible_dir in possible_dirs:
+            if possible_dir.exists() and (possible_dir / 'weights').exists():
+                save_dir = possible_dir
+                break
+        
+        # If we have results, use the save_dir from results
+        if results and hasattr(results, 'save_dir') and results.save_dir:
+            save_dir = Path(results.save_dir)
+        
+        if save_dir:
+            source_model_path = save_dir / 'weights' / 'best.pt'
+            source_last_path = save_dir / 'weights' / 'last.pt'
+        else:
+            # Fallback to standard location
+            source_model_path = project_root / 'runs' / 'detect' / run_name_dir / 'weights' / 'best.pt'
+            source_last_path = project_root / 'runs' / 'detect' / run_name_dir / 'weights' / 'last.pt'
         
         if source_model_path.exists():
             # Copy best model to models directory
