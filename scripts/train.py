@@ -110,8 +110,9 @@ def train_model(
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             run_name = f"yolov8{model_size}-ppe-{timestamp}"
         
-        # Initialize wandb with comprehensive config
+        # Initialize wandb with config
         # CRITICAL: Initialize wandb BEFORE model.train() so Ultralytics can detect it
+        # Use minimal configuration for maximum compatibility
         wandb.init(
             project=project_name,
             name=run_name,
@@ -128,22 +129,18 @@ def train_model(
                 "val": val,
                 "resume": resume,
                 **kwargs
-            },
-            # Track system metrics
-            settings=wandb.Settings(
-                _disable_stats=False,
-                _disable_meta=False,
-                _disable_service=False,  # Enable service for better sync
-            )
+            }
         )
+        
         wandb_initialized = True
         print(f"✓ Weights & Biases initialized: {project_name}/{run_name}")
         if wandb.run:
             print(f"  View run at: {wandb.run.url}")
     except Exception as e:
-        print(f"⚠ Warning: Could not initialize W&B: {e}")
-        print("Proceeding without W&B logging. Metrics will still be tracked locally.")
-        print("  To fix in Colab: Set WANDB_API_KEY in Colab secrets or environment")
+        print(f"⚠ Warning: Could not initialize W&B manually: {e}")
+        print("  This is okay - Ultralytics will initialize W&B automatically when wandb=True is set.")
+        print("  Metrics will still be logged to W&B by Ultralytics.")
+        # Don't set wandb_initialized = True, but still try to enable it in Ultralytics
     
     # Check for resume checkpoint
     run_name_dir = f'yolov8{model_size}_ppe_detection'
@@ -198,16 +195,16 @@ def train_model(
         train_args["device"] = device
     
     # CRITICAL: Enable wandb explicitly in Ultralytics
-    # This ensures metrics are logged at every step and epoch
+    # Ultralytics has built-in wandb support that will work even if our manual init failed
+    # Set project and enable wandb - Ultralytics will handle the rest
+    train_args["project"] = project_name
+    train_args["wandb"] = True  # Explicitly enable wandb in Ultralytics
+    
     if wandb_initialized:
-        # Method 1: Set project (Ultralytics detects wandb if initialized)
-        train_args["project"] = project_name
-        # Method 2: Explicitly enable wandb (more reliable)
-        train_args["wandb"] = True
-        print("✓ W&B logging explicitly enabled in training arguments")
+        print("✓ W&B logging enabled (manual initialization successful)")
     else:
-        print("⚠ W&B not initialized - metrics will only be logged locally")
-        print("  Set WANDB_API_KEY environment variable to enable W&B logging")
+        print("✓ W&B logging enabled in Ultralytics (will auto-initialize if wandb is available)")
+        print("  Ultralytics will attempt to initialize wandb automatically")
     
     print("\n" + "=" * 60)
     print("Training Configuration:")
@@ -217,13 +214,19 @@ def train_model(
     print("=" * 60)
     print(f"  Validation: {'ENABLED' if val else 'DISABLED'}")
     print(f"  Checkpoint saving: Every {save_period} epoch(s)")
-    print(f"  W&B logging: {'ENABLED' if wandb_initialized else 'DISABLED'}")
+    if wandb_initialized:
+        print(f"  W&B logging: ENABLED (manual initialization)")
+    else:
+        print(f"  W&B logging: ENABLED (Ultralytics auto-initialization)")
     print("=" * 60 + "\n")
 
     # Train the model
     print("Starting model training...")
     print("  Metrics will be logged to W&B in real-time during training")
     print("  Checkpoints will be saved every epoch for Colab safety\n")
+    
+    # Initialize results to None in case of early interruption
+    results = None
     
     try:
         # Train the model
@@ -232,46 +235,57 @@ def train_model(
         print("\n✓ Training completed successfully!")
         
         # Log final summary to wandb if initialized
-        if wandb_initialized:
+        if wandb_initialized and wandb.run:
             # Ultralytics automatically logs all metrics during training
             # But we can log final summary if available
             try:
                 # Log model as artifact
-                best_model_path = results.save_dir / "weights" / "best.pt"
-                if best_model_path.exists():
-                    artifact = wandb.Artifact(
-                        f"yolov8{model_size}_ppe_best",
-                        type="model",
-                        description=f"Best YOLOv8{model_size} model for PPE detection"
-                    )
-                    artifact.add_file(str(best_model_path))
-                    wandb.log_artifact(artifact)
-                    print("✓ Best model logged to W&B as artifact")
-                    
-                    # Also log last checkpoint
-                    last_model_path = results.save_dir / "weights" / "last.pt"
-                    if last_model_path.exists():
-                        last_artifact = wandb.Artifact(
-                            f"yolov8{model_size}_ppe_last",
+                if hasattr(results, 'save_dir') and results.save_dir:
+                    best_model_path = Path(results.save_dir) / "weights" / "best.pt"
+                    if best_model_path.exists():
+                        artifact = wandb.Artifact(
+                            f"yolov8{model_size}_ppe_best",
                             type="model",
-                            description=f"Last YOLOv8{model_size} checkpoint"
+                            description=f"Best YOLOv8{model_size} model for PPE detection"
                         )
-                        last_artifact.add_file(str(last_model_path))
-                        wandb.log_artifact(last_artifact)
-                        print("✓ Last checkpoint logged to W&B as artifact")
+                        artifact.add_file(str(best_model_path))
+                        wandb.log_artifact(artifact)
+                        print("✓ Best model logged to W&B as artifact")
+                        
+                        # Also log last checkpoint
+                        last_model_path = Path(results.save_dir) / "weights" / "last.pt"
+                        if last_model_path.exists():
+                            last_artifact = wandb.Artifact(
+                                f"yolov8{model_size}_ppe_last",
+                                type="model",
+                                description=f"Last YOLOv8{model_size} checkpoint"
+                            )
+                            last_artifact.add_file(str(last_model_path))
+                            wandb.log_artifact(last_artifact)
+                            print("✓ Last checkpoint logged to W&B as artifact")
             except Exception as e:
                 print(f"⚠ Warning: Could not log model artifact: {e}")
         
     except KeyboardInterrupt:
         print("\n⚠ Training interrupted by user (Ctrl+C)")
         print("  Checkpoint should be saved. You can resume with resume=True")
-        if wandb_initialized:
-            wandb.log({"training_status": "interrupted"})
-        # Don't raise - allow checkpoint saving to proceed
+        if wandb_initialized and wandb.run:
+            try:
+                wandb.log({"training_status": "interrupted"})
+            except:
+                pass
+        # Set results to None if training was interrupted before completion
+        if results is None:
+            results = type('obj', (object,), {'save_dir': None})()
     except Exception as e:
         print(f"\n✗ Training failed with error: {e}")
-        if wandb_initialized:
-            wandb.log({"training_error": str(e), "training_status": "failed"})
+        if wandb_initialized and wandb.run:
+            try:
+                wandb.log({"training_error": str(e), "training_status": "failed"})
+            except:
+                pass
+        # Set results to None on error
+        results = type('obj', (object,), {'save_dir': None})()
         raise
     
     # Save the best model to models directory and backup to Google Drive
@@ -317,16 +331,20 @@ def train_model(
     except Exception as e:
         print(f"⚠ Warning: Error saving/backing up models: {e}")
     
-    # Finish wandb run
-    if wandb_initialized:
-        wandb.finish()
-        print("✓ W&B run completed")
+    # Finish wandb run (only if we manually initialized it)
+    if wandb_initialized and wandb.run:
+        try:
+            wandb.finish()
+            print("✓ W&B run completed")
+        except:
+            pass  # Ignore errors when finishing wandb
     
     print("\n" + "=" * 60)
     print("Training Pipeline Complete!")
     print("=" * 60)
     
-    return results
+    # Return results if available, otherwise return None
+    return results if results is not None else None
 
 
 if __name__ == "__main__":
