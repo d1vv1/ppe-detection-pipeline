@@ -1,6 +1,7 @@
 import wandb
 import os
 import shutil
+import time
 from pathlib import Path
 from ultralytics import YOLO
 from datetime import datetime
@@ -91,9 +92,10 @@ def train_model(
     
     # Initialize Weights & Biases with proper configuration
     wandb_initialized = False
+    api_key = os.environ.get('WANDB_API_KEY')  # Get API key first for use in exception handler
+    
     try:
         # Check for API key in environment (for Colab)
-        api_key = os.environ.get('WANDB_API_KEY')
         if api_key:
             wandb.login(key=api_key)
             print("✓ W&B API key found in environment")
@@ -137,10 +139,33 @@ def train_model(
         if wandb.run:
             print(f"  View run at: {wandb.run.url}")
     except Exception as e:
-        print(f"⚠ Warning: Could not initialize W&B manually: {e}")
-        print("  This is okay - Ultralytics will initialize W&B automatically when wandb=True is set.")
-        print("  Metrics will still be logged to W&B by Ultralytics.")
-        # Don't set wandb_initialized = True, but still try to enable it in Ultralytics
+        error_msg = str(e)
+        print(f"⚠ Warning: Could not initialize W&B manually: {error_msg}")
+        
+        # Check if it's an authentication error
+        if "401" in error_msg or "not logged in" in error_msg.lower() or "PERMISSION_ERROR" in error_msg:
+            print("  Authentication issue detected. Trying to re-login...")
+            try:
+                # Try to force re-login with relogin=True
+                if api_key:
+                    wandb.login(key=api_key, relogin=True)
+                    # Wait a moment for login to complete
+                    time.sleep(1)
+                    # Try init again after re-login
+                    if run_name is None:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        run_name = f"yolov8{model_size}-ppe-{timestamp}"
+                    wandb.init(project=project_name, name=run_name)
+                    wandb_initialized = True
+                    print("✓ W&B initialized after re-login")
+                else:
+                    print("  No API key available for re-login. Ultralytics will attempt auto-initialization.")
+            except Exception as retry_error:
+                print(f"  Re-login failed: {retry_error}")
+                print("  Ultralytics will attempt to initialize wandb automatically during training.")
+        else:
+            print("  Ultralytics will attempt to initialize wandb automatically during training.")
+            print("  Metrics will be logged to W&B if Ultralytics successfully initializes it.")
     
     # Check for resume checkpoint
     run_name_dir = f'yolov8{model_size}_ppe_detection'
@@ -194,17 +219,18 @@ def train_model(
     if device:
         train_args["device"] = device
     
-    # CRITICAL: Enable wandb explicitly in Ultralytics
-    # Ultralytics has built-in wandb support that will work even if our manual init failed
-    # Set project and enable wandb - Ultralytics will handle the rest
+    # CRITICAL: Enable wandb in Ultralytics
+    # Ultralytics automatically detects wandb if it's installed and initialized
+    # We just need to set the project name - Ultralytics will use wandb if available
     train_args["project"] = project_name
-    train_args["wandb"] = True  # Explicitly enable wandb in Ultralytics
+    # NOTE: Do NOT pass wandb=True - it's not a valid argument
+    # Ultralytics automatically uses wandb if wandb.init() was called before training
     
     if wandb_initialized:
-        print("✓ W&B logging enabled (manual initialization successful)")
+        print("✓ W&B logging enabled (wandb initialized, Ultralytics will use it automatically)")
     else:
-        print("✓ W&B logging enabled in Ultralytics (will auto-initialize if wandb is available)")
-        print("  Ultralytics will attempt to initialize wandb automatically")
+        print("⚠ W&B not manually initialized - Ultralytics may still auto-initialize wandb")
+        print("  If wandb is installed, Ultralytics will attempt to initialize it automatically")
     
     print("\n" + "=" * 60)
     print("Training Configuration:")
@@ -215,9 +241,9 @@ def train_model(
     print(f"  Validation: {'ENABLED' if val else 'DISABLED'}")
     print(f"  Checkpoint saving: Every {save_period} epoch(s)")
     if wandb_initialized:
-        print(f"  W&B logging: ENABLED (manual initialization)")
+        print(f"  W&B logging: ENABLED (wandb initialized)")
     else:
-        print(f"  W&B logging: ENABLED (Ultralytics auto-initialization)")
+        print(f"  W&B logging: Will be auto-enabled by Ultralytics (if wandb is available)")
     print("=" * 60 + "\n")
 
     # Train the model
